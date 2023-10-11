@@ -32,17 +32,23 @@ if config['default']['binary_location']:
     options = Options()
     options.binary_location = config['default']['binary_location']
 
-driver = webdriver.Chrome(config['default']['chromedriver'],options=options)
+driver = webdriver.Chrome(r"C:\Users\karet\Downloads\chromedriver_win32\chromedriver", options=options)
 url = "https://scholar.google.com/"
 driver.get(url)
 
 # Setting Google Scholar
 driver.maximize_window()
+time.sleep(1)
 driver.find_element_by_id("gs_hdr_mnu").click()
+time.sleep(1)
 driver.find_element_by_class_name("gs_btnP").click()
+time.sleep(1)
 driver.find_element_by_id("gs_num-b").click()
+time.sleep(1)
 driver.find_element_by_css_selector('a[data-v="20"').click()
+time.sleep(1)
 driver.find_element_by_id("gs_settings_import_some").click()
+time.sleep(1)
 driver.find_element_by_name("save").click()
 
 
@@ -96,17 +102,21 @@ def parser(soup, page, year):
         paper = {'Link': result.find('h3', {'class': "gs_rt"}).find('a')['href'], 'Additional link': '', 'Title': '',
                  'Authors': '', 'Abstract': '', 'Cited by': '', 'Cited list': '', 'Related list': '', 'Bibtex': '',
                  'Year': year, 'Google page': page}
-
+        print(paper)
         # If it does not pass at Title-Abstract-Keyword filter exclude this paper and continue
+        """
         if not filterTitleAbsKey(paper['Link']):
             continue
+        """
 
         try:
             paper["Additional link"] = result.find('div', {'class': "gs_or_ggsm"}).find('a')['href']
         except:
             paper["Additional link"] = ''
+            print("NOTHING WAS FOUND")
 
         paper['Title'] = result.find('h3', {'class': "gs_rt"}).text
+        print(paper['Title'])
         paper['Authors'] = ";".join(
             ["%s:%s" % (a.text, a['href']) for a in result.find('div', {'class': "gs_a"}).findAll('a')])
 
@@ -153,7 +163,9 @@ if __name__ == '__main__':
         page = 1
         total = 0
         while True:
+            print("PARSER IN")
             art, t = parser(BeautifulSoup(driver.page_source, 'lxml'), page, year)
+            print("PARSER OUT")
             total += t
             df = pd.DataFrame(art)
             df.to_csv(output, mode='a', header=False, index=False)
