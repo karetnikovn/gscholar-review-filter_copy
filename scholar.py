@@ -10,11 +10,16 @@ import re
 import logging
 import configparser
 import time
+import openai
+import requests
+from pdfminer.high_level import extract_text
+
 
 # Basic configs:
 logging.basicConfig(filename='log.log', level=logging.INFO, format='%(asctime)s %(message)s')
 config = configparser.ConfigParser()
 config.read('config.ini')
+openai.api_key = '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'
 
 # Load PICOC terms
 picoc = {
@@ -50,6 +55,92 @@ time.sleep(1)
 driver.find_element_by_id("gs_settings_import_some").click()
 time.sleep(1)
 driver.find_element_by_name("save").click()
+
+
+def split_content_into_chunks(content, chunk_size=16000):  # chunk_size can be adjusted as needed
+    return [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
+
+
+def clean_html_content(html_content):
+    soup = BeautifulSoup(html_content, 'html.parser')
+
+    # Extract just the body content
+    body = soup.body
+
+    # Remove <script> and <style> tags from the body
+    [s.extract() for s in body(['script', 'style'])]
+
+    # Convert back to string and return
+    return str(body)
+
+
+def extract_text_from_pdf(pdf_link):
+    try:
+        # Download PDF
+        response = requests.get(pdf_link)
+        response.raise_for_status()  # Check if the request was successful
+
+        file_path = "temp.pdf"
+        with open(file_path, "wb") as f:
+            f.write(response.content)
+
+        # Extract text from the first two pages
+        return extract_text(file_path, page_numbers=[0, 1,2,3,4])
+    except requests.RequestException as e:
+        print(f"Error downloading PDF: {e}")
+        return ""
+    except Exception as e:
+        print(f"Error occurred while processing the PDF: {e}")
+        return ""
+
+
+import time
+
+
+def get_abstract_from_chatgpt(content, content_type="html", max_retries=3, initial_delay=5):
+    # Preprocess content based on its type
+    if content_type == "html":
+        cleaned_content = clean_html_content(content)
+    elif content_type == "pdf":
+        cleaned_content = content  # Assuming PDF content is already text and doesn't need further cleaning
+    else:
+        raise ValueError(f"Unknown content_type: {content_type}")
+
+    chunks = split_content_into_chunks(cleaned_content)
+
+    for chunk in chunks:
+        retry_count = 0
+        while retry_count < max_retries:
+            try:
+                # Construct the role message based on content type
+                system_message = f"You are a helpful assistant that extracts abstracts from {content_type.upper()} content."
+
+                response = openai.ChatCompletion.create(
+                    model="gpt-3.5-turbo-16k",
+                    messages=[
+                        {"role": "system", "content": system_message},
+                        {"role": "user",
+                         "content": f"Extract abstract from the following {content_type.upper()} content: {chunk}. Output only it and nothing else."
+                                    f"Hint: usually it starts from the word abstract"
+                                    f" If you did not find an abstract, please output 'Not Found'."}
+                    ]
+                )
+
+                abstract = response.choices[0].message['content'].strip()
+                if abstract.lower() != 'not found':
+                    return abstract
+                break  # Break out of the retry loop if no server error occurred
+            except Exception as e:
+                if "The server is overloaded or not ready yet" in str(e) and retry_count < max_retries - 1:
+                    wait_time = initial_delay * (2 ** retry_count)  # Exponential backoff
+                    print(f"Server error detected. Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                    retry_count += 1
+                else:
+                    raise  # Raise the exception if it's a different error or if retries are exhausted
+
+    # If all chunks were processed and no abstract was found:
+    return "Not Found"
 
 
 # Sometimes a Captcha shows up. It needs to be fixed manually. This function makes the code wait until this be fixed
@@ -94,6 +185,25 @@ def filterTitleAbsKey(site):
     return False
 
 
+def extract_abstract(content, content_type):
+    """Utility function to get abstract and handle errors"""
+    try:
+        abstract = get_abstract_from_chatgpt(content, content_type=content_type)
+        print(abstract)
+        return abstract
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        return ''
+
+def is_pdf(link):
+    try:
+        # Get a small portion of the file (first 5 bytes should suffice for checking the PDF signature)
+        response = requests.get(link, stream=True, timeout=5)
+        start_of_file = response.content[:5]
+        return start_of_file == b'%PDF-'
+    except requests.RequestException:
+        return False
+
 # Parser HTML
 def parser(soup, page, year):
     papers = []
@@ -102,28 +212,43 @@ def parser(soup, page, year):
         paper = {'Link': result.find('h3', {'class': "gs_rt"}).find('a')['href'], 'Additional link': '', 'Title': '',
                  'Authors': '', 'Abstract': '', 'Cited by': '', 'Cited list': '', 'Related list': '', 'Bibtex': '',
                  'Year': year, 'Google page': page}
-        print(paper)
+
         # If it does not pass at Title-Abstract-Keyword filter exclude this paper and continue
-        """
+
         if not filterTitleAbsKey(paper['Link']):
             continue
-        """
 
-        try:
-            paper["Additional link"] = result.find('div', {'class': "gs_or_ggsm"}).find('a')['href']
-        except:
-            paper["Additional link"] = ''
-            print("NOTHING WAS FOUND")
+
+
 
         paper['Title'] = result.find('h3', {'class': "gs_rt"}).text
         print(paper['Title'])
         paper['Authors'] = ";".join(
             ["%s:%s" % (a.text, a['href']) for a in result.find('div', {'class': "gs_a"}).findAll('a')])
 
+        # Main logic
+        if is_pdf(paper["Link"]):
+            pdf_text = extract_text_from_pdf(paper["Link"])
+            paper["Abstract"] = extract_abstract(pdf_text, content_type="pdf")
+        else:
+            driver.get(paper["Link"])
+            time.sleep(2)
+            papier_page_soup = BeautifulSoup(driver.page_source, 'html.parser')
+            html_content = str(papier_page_soup)
+            paper["Abstract"] = extract_abstract(html_content, content_type="html")
+
+        try:
+            paper["Additional link"] = result.find('div', {'class': "gs_or_ggsm"}).find('a')['href']
+        except:
+            paper["Additional link"] = ''
+
+
+        """
         try:
             paper['Abstract'] = result.find('div', {'class': "gs_rs"}).text
         except:
             paper['Abstract'] = ''
+        """
 
         for a in result.findAll('div', {'class': "gs_fl"})[-1].findAll('a'):
             if a.text != '':
@@ -137,7 +262,7 @@ def parser(soup, page, year):
                     
         papers.append(paper)
         # Wait 20 seconds until the next request to google
-        time.sleep(20)
+        time.sleep(5)
 
     return papers, len(html)
 
@@ -178,7 +303,7 @@ if __name__ == '__main__':
                     "No more pages for {} year, total of {} pages and {} articles processed".format(year, page, total))
                 year += 1
                 # Wait 10 seconds until the next page request
-                time.sleep(10)
+                time.sleep(3)
                 break
 
     logging.info("Ending...")
