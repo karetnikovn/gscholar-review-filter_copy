@@ -19,7 +19,7 @@ from pdfminer.high_level import extract_text
 logging.basicConfig(filename='log.log', level=logging.INFO, format='%(asctime)s %(message)s')
 config = configparser.ConfigParser()
 config.read('config.ini')
-openai.api_key = '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'
+openai.api_key = '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'
 
 # Load PICOC terms
 picoc = {
@@ -347,7 +347,7 @@ def generate_answer(question, insights):
         ]
     )
 
-    return response.choices[0].text.strip()
+    return response.choices[0].message['content'].strip()
 
 
 
@@ -388,7 +388,7 @@ if __name__ == '__main__':
 
     with open(output, 'a', newline='') as outcsv:
         csv.writer(outcsv).writerow(['Link', 'Additional link', 'Title', 'Authors', 'Abstract', 'Cited by',
-                                     'Cited list', 'Related list', 'Bibtex', 'Year', 'Google page',"Is LLM Simulation", "Simulation Type", "Simulation Benefits"])
+                                     'Cited list', 'Related list', 'Bibtex', 'Year', 'Google page',"Is LLM Simulation", "Simulation Type","Application Type" ,"Simulation Benefits"])
 
     # String search year by year.
     while year <= int(config['search']['end_year']):
