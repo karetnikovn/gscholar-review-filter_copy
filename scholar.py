@@ -19,7 +19,7 @@ from pdfminer.high_level import extract_text
 logging.basicConfig(filename='log.log', level=logging.INFO, format='%(asctime)s %(message)s')
 config = configparser.ConfigParser()
 config.read('config.ini')
-openai.api_key = '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'
+openai.api_key = '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'
 
 # Load PICOC terms
 picoc = {
@@ -92,6 +92,62 @@ def extract_text_from_pdf(pdf_link):
     except Exception as e:
         print(f"Error occurred while processing the PDF: {e}")
         return ""
+
+
+def analyze_abstract(abstract):
+    # Step 1: Check if the abstract discusses a simulation with LLM models
+    response_1 = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo-16k",
+        messages=[
+            {"role": "user",
+             "content": "Does this abstract describe a specific simulation created by the authors using LLM models? Please give one word as an Yes/No answer. Abstract: " + abstract}
+        ]
+    )
+    is_llm_simulation = response_1.choices[0].message['content'].strip().lower() == 'yes'
+
+    if not is_llm_simulation:
+        return False, None, None,None
+
+    # Step 2: Identify the type of simulation
+    response_2 = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo-16k",
+        messages=[
+            {"role": "user", "content": "What type of simulation does this abstract describe? Please give one word as an answer."
+                                        "If there is no information to asnwer this questions, state NA"
+                                        "Abstract: " + abstract}
+        ]
+    )
+    types = response_2.choices[0].message['content'].strip()
+
+    # Step 3: Outlining the main benefits
+    response_3 = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo-16k",
+        messages=[
+            {"role": "user",
+             "content": "What are the main benefits of the simulation described in this abstract?"
+                        "Desribe shortly"
+                        "If there is no information to asnwer this questions, state NA."
+                        "Abstract: " + abstract}
+        ]
+    )
+    benefits = response_3.choices[0].message['content'].strip()
+
+
+    # Step 4: Outlining the main application
+    response_4 = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo-16k",
+        messages=[
+            {"role": "user",
+             "content": "What is the primary application of LLM in this social simulation?"
+                        "Desribe shortly."
+                        "If there is no information to asnwer this questions, state NA."
+                        "Abstract: " + abstract}
+        ]
+    )
+    applications = response_4.choices[0].message['content'].strip()
+
+
+    return is_llm_simulation, types,applications, benefits
 
 
 import time
@@ -211,14 +267,14 @@ def parser(soup, page, year):
     for result in html:
         paper = {'Link': result.find('h3', {'class': "gs_rt"}).find('a')['href'], 'Additional link': '', 'Title': '',
                  'Authors': '', 'Abstract': '', 'Cited by': '', 'Cited list': '', 'Related list': '', 'Bibtex': '',
-                 'Year': year, 'Google page': page}
+                 'Year': year, 'Google page': page, "Is LLM Simulation":'', "Simulation Type": '',"Application Type":'', "Simulation Benefits":''}
 
         # If it does not pass at Title-Abstract-Keyword filter exclude this paper and continue
-
+        """
         if not filterTitleAbsKey(paper['Link']):
             continue
 
-
+        """
 
 
         paper['Title'] = result.find('h3', {'class': "gs_rt"}).text
@@ -236,6 +292,15 @@ def parser(soup, page, year):
             papier_page_soup = BeautifulSoup(driver.page_source, 'html.parser')
             html_content = str(papier_page_soup)
             paper["Abstract"] = extract_abstract(html_content, content_type="html")
+
+        # Analyzing the abstract
+        is_llm_simulation, types,applications, benefits = analyze_abstract(paper["Abstract"])
+
+        # Storing the results in the paper dictionary
+        paper["Is LLM Simulation"] = is_llm_simulation
+        paper["Simulation Type"] = types
+        paper["Application Type"] = applications
+        paper["Simulation Benefits"] = benefits
 
         try:
             paper["Additional link"] = result.find('div', {'class': "gs_or_ggsm"}).find('a')['href']
@@ -267,6 +332,50 @@ def parser(soup, page, year):
     return papers, len(html)
 
 
+
+
+
+
+def generate_answer(question, insights):
+    # This function will use ChatGPT to generate an answer based on the question and insights
+    prompt = f"{question}\n\nTo answers use this information and nothing else: {', '.join(insights)}\n\n"
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo-16k",
+        messages=[
+            {"role": "user",
+             "content": prompt}
+        ]
+    )
+
+    return response.choices[0].text.strip()
+
+
+
+
+def generate_report(types, applications, benefits):
+    print("\nReport on LLMs in Social Simulations:")
+    print("-" * 40)
+
+    questions = [
+        "What are the main types of applications of Social Simulations created using LLMs?",
+        "What are the primary applications of LLMs in Social Simulations?",
+        "What distinct benefits do LLMs offer over traditional methods in Social Simulations?",
+
+    ]
+
+    insights_lists = [types, applications, benefits]
+
+    for i, question in enumerate(questions):
+        answer = generate_answer(question, insights_lists[i])
+        print(f"\n{i + 1}. {question}\n{answer}")
+
+
+
+
+
+
+
+
 if __name__ == '__main__':
     query = config['search']['query']
     year = int(config['search']['start_year'])
@@ -279,7 +388,7 @@ if __name__ == '__main__':
 
     with open(output, 'a', newline='') as outcsv:
         csv.writer(outcsv).writerow(['Link', 'Additional link', 'Title', 'Authors', 'Abstract', 'Cited by',
-                                     'Cited list', 'Related list', 'Bibtex', 'Year', 'Google page'])
+                                     'Cited list', 'Related list', 'Bibtex', 'Year', 'Google page',"Is LLM Simulation", "Simulation Type", "Simulation Benefits"])
 
     # String search year by year.
     while year <= int(config['search']['end_year']):
@@ -305,6 +414,13 @@ if __name__ == '__main__':
                 # Wait 10 seconds until the next page request
                 time.sleep(3)
                 break
+
+    types = list(df['Simulation Type'].dropna())
+    applications = list(df['Application Type'].dropna())
+    benefits = list(df['Simulation Benefits'].dropna())
+
+
+    generate_report(types, applications, benefits)
 
     logging.info("Ending...")
     driver.close()
