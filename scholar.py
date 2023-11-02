@@ -259,7 +259,7 @@ def get_abstract_from_chatgpt(content, content_type="html", max_retries=3, initi
     return "Not Found"
 
 
-# Sometimes a Captcha shows up. It needs to be fixed manually. This function makes the code wait until this be fixed
+# Sometimes a Captcha shows up. It needs to be fixed manually. This function makes the code wait until thisj be fixed
 def check_captcha():
     captcha = driver.find_elements_by_css_selector("#captcha")
     captcha += driver.find_elements_by_css_selector("#gs_captcha_f")
