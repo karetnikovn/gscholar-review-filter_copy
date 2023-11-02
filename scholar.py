@@ -19,7 +19,7 @@ from pdfminer.high_level import extract_text
 logging.basicConfig(filename='log.log', level=logging.INFO, format='%(asctime)s %(message)s')
 config = configparser.ConfigParser()
 config.read('config.ini')
-openai.api_key = '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'
+openai.api_key = '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'
 
 # Load PICOC terms
 picoc = {
@@ -85,7 +85,7 @@ def extract_text_from_pdf(pdf_link):
             f.write(response.content)
 
         # Extract text from the first two pages
-        return extract_text(file_path, page_numbers=[0, 1,2,3,4])
+        return extract_text(file_path, page_numbers=[0, 1,2,3])
     except requests.RequestException as e:
         print(f"Error downloading PDF: {e}")
         return ""
@@ -94,60 +94,120 @@ def extract_text_from_pdf(pdf_link):
         return ""
 
 
-def analyze_abstract(abstract):
-    # Step 1: Check if the abstract discusses a simulation with LLM models
-    response_1 = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo-16k",
-        messages=[
-            {"role": "user",
-             "content": "Does this abstract describe a specific simulation created by the authors using LLM models? Please give one word as an Yes/No answer. Abstract: " + abstract}
-        ]
-    )
-    is_llm_simulation = response_1.choices[0].message['content'].strip().lower() == 'yes'
+import time
 
+
+def analyze_abstract(abstract, max_retries=4, initial_delay=5):
+    def request_to_openai(message_content, max_retries, initial_delay):
+        retry_count = 0
+        while retry_count < max_retries:
+            try:
+                response = openai.ChatCompletion.create(
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": message_content}]
+                )
+                return response.choices[0].message['content'].strip()
+            except Exception as e:
+                if "The server is overloaded or not ready yet" in str(e) and retry_count < max_retries - 1:
+                    wait_time = initial_delay * (2 ** retry_count)  # Exponential backoff
+                    print(f"Server error detected. Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                    retry_count += 1
+                else:
+                    print("SMTH wrong in request_to_openai functions")
+                    return "NA"
+                    # raise  # Raise the exception if it's a different error or if retries are exhausted
+
+    # Step 1: Check if the abstract discusses a simulation with LLM models
+    response_1_content = request_to_openai(
+        "Based on the paper abstract tell, whether main purpose of the study is to simulate or model social phenomena?"
+        # "Social simulation is defined as a method that uses computer-based models to replicate, analyze,"
+      #   "and predict complex social dynamics based on the behaviors and interactions of individuals and groups within a society"
+        "Please give one word as an Yes/No/Unclear answer. Abstract: " + abstract,
+        max_retries, initial_delay)
+    print(f"Based on abstract: {response_1_content.lower()}")
+    is_llm_simulation = response_1_content.lower() in ['yes', 'yes.',"unclear","unclear."]
+
+    #  .
     if not is_llm_simulation:
-        return False, None, None,None
+        return "no", None, None, None, None
+
+
+    
+    # Step 15: Identify the domain of the simulation
+    domain = request_to_openai(
+        "What is the domain of the simulation described in this abstract (e.g., social, economic, etc.)? Please give max 5 words as an answer."
+        "If there is no information to answer this question, state NA. Abstract: " + abstract, max_retries,
+        initial_delay)
 
     # Step 2: Identify the type of simulation
-    response_2 = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo-16k",
-        messages=[
-            {"role": "user", "content": "What type of simulation does this abstract describe? Please give one word as an answer."
-                                        "If there is no information to asnwer this questions, state NA"
-                                        "Abstract: " + abstract}
-        ]
-    )
-    types = response_2.choices[0].message['content'].strip()
+    entities = request_to_openai(
+        "Does the abstract mention entities that could represent individuals, groups, or institutions within a social context?"
+        "Please give Yes/No/Unclear as an answer."
+        "If there is no information to answer this question, state NA. Abstract: " + abstract, max_retries,
+        initial_delay)
 
     # Step 3: Outlining the main benefits
-    response_3 = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo-16k",
-        messages=[
-            {"role": "user",
-             "content": "What are the main benefits of the simulation described in this abstract?"
-                        "Desribe shortly"
-                        "If there is no information to asnwer this questions, state NA."
-                        "Abstract: " + abstract}
-        ]
-    )
-    benefits = response_3.choices[0].message['content'].strip()
-
-
+    interactions = request_to_openai("Does the abstract mention interactions, behaviors, or dynamics that are characteristic of social systems ?"
+                                  "Please give Yes/No/Unclear as an answer."
+                                 "If there is no information to answer this question, state NA. Abstract: " + abstract,
+                                 max_retries, initial_delay)
+    """
     # Step 4: Outlining the main application
-    response_4 = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo-16k",
-        messages=[
-            {"role": "user",
-             "content": "What is the primary application of LLM in this social simulation?"
-                        "Desribe shortly."
-                        "If there is no information to asnwer this questions, state NA."
-                        "Abstract: " + abstract}
-        ]
-    )
-    applications = response_4.choices[0].message['content'].strip()
+    applications = request_to_openai("What is the primary application of LLM in this social simulation?"
+                                     "Describe shortly."
+                                     "If there is no information to answer this question, state NA. Abstract: " + abstract,
+                                     max_retries, initial_delay)
+    """
 
 
-    return is_llm_simulation, types,applications, benefits
+    applications = None
+
+    return response_1_content.lower(), domain, entities, applications, interactions
+
+
+def analyze_title(title, max_retries=4, initial_delay=5):
+    def request_to_openai(message_content, max_retries, initial_delay):
+        retry_count = 0
+        while retry_count < max_retries:
+            try:
+                response = openai.ChatCompletion.create(
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": message_content}]
+                )
+                return response.choices[0].message['content'].strip()
+            except Exception as e:
+                if "The server is overloaded or not ready yet" in str(e) and retry_count < max_retries - 1:
+                    wait_time = initial_delay * (2 ** retry_count)  # Exponential backoff
+                    print(f"Server error detected. Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                    retry_count += 1
+                else:
+                    print("SMTH wrong in request_to_openai functions")
+                    return "NA"
+                    # raise  # Raise the exception if it's a different error or if retries are exhausted
+
+    # Step 1: Check if the abstract discusses a simulation with LLM models
+    response_1_content = request_to_openai(
+        "Based on the scientific paper title tell, whether paper may describe a created by the authors computational model(s) or simulation that attempt to mimic social processes, behaviors, or systems?"
+       # "Social simulation is defined as a method that uses computer-based models to replicate, analyze,"
+     #   "and predict complex social dynamics based on the behaviors and interactions of individuals and groups within a society"
+        "Please give one word as an Yes/No/Unclear answer. Title: " + title,
+        max_retries, initial_delay)
+    print(f"Based on title: {response_1_content.lower()}" )
+    is_llm_simulation = response_1_content.lower() in ['yes', 'yes.',"unclear","unclear."]
+
+    #  computational models that attempt to mimic social processes, behaviors, or systems.
+    if not is_llm_simulation:
+        return "no", None, None, None, None
+
+    domain = None
+    types = None
+
+    benefits = None
+    applications = None
+
+    return response_1_content.lower(), domain, types, applications, benefits
 
 
 import time
@@ -223,23 +283,6 @@ def check_captcha():
 
 
 # Filter the PICOC terms inside the Title-Abstract-Keywords
-def filterTitleAbsKey(site):
-    try:
-        page = requests.get(site,timeout=600)
-        text = BeautifulSoup(page.text, 'lxml').get_text()
-        text = str.lower(text)
-        for terms in filter(None, picoc.values()):
-            if not terms.search(text):
-                logging.info("%s not passed on title-abs-key filter", site)
-                return False
-        logging.info("%s passed on title-abs-key filter", site)
-        return True
-    except requests.exceptions.Timeout:
-        logging.info("[TIMEOUT] Timeout on %s and not passed on title-abs-key filter. Skipping website", site)
-    except:
-        logging.info("[ERROR] on %s and not passed on title-abs-key filter", site)
-    return False
-
 
 def extract_abstract(content, content_type):
     """Utility function to get abstract and handle errors"""
@@ -261,13 +304,13 @@ def is_pdf(link):
         return False
 
 # Parser HTML
-def parser(soup, page, year):
+def parser(soup, page, year, number_simulations):
     papers = []
     html = soup.findAll('div', {'class': 'gs_r gs_or gs_scl'})
     for result in html:
         paper = {'Link': result.find('h3', {'class': "gs_rt"}).find('a')['href'], 'Additional link': '', 'Title': '',
                  'Authors': '', 'Abstract': '', 'Cited by': '', 'Cited list': '', 'Related list': '', 'Bibtex': '',
-                 'Year': year, 'Google page': page, "Is LLM Simulation":'', "Simulation Type": '',"Application Type":'', "Simulation Benefits":''}
+                 'Year': year, 'Google page': page, "Is LLM Simulation Title":'', "Is LLM Simulation Abstract":'', "Simulation Domain":'', "Entities?": '',"Application Type":'', "Interactions?":''}
 
         # If it does not pass at Title-Abstract-Keyword filter exclude this paper and continue
         """
@@ -276,6 +319,23 @@ def parser(soup, page, year):
 
         """
 
+        for a in result.findAll('div', {'class': "gs_fl"})[-1].findAll('a'):
+            if a.text != '':
+                if a.text.startswith('Cited'):
+                    paper['Cited by'] = a.text.rstrip().split()[-1]
+                    paper['Cited list'] = url + a['href']
+
+                if a.text.startswith('Related'):
+                    paper['Related list'] = url + a['href']
+                if a.text.startswith('Import'):
+                    paper['Bibtex'] = requests.get(a['href']).text
+
+
+        if (paper['Cited by'].isdigit() == False):
+            continue
+
+
+
 
         paper['Title'] = result.find('h3', {'class': "gs_rt"}).text
         print(paper['Title'])
@@ -283,24 +343,48 @@ def parser(soup, page, year):
             ["%s:%s" % (a.text, a['href']) for a in result.find('div', {'class': "gs_a"}).findAll('a')])
 
         # Main logic
-        if is_pdf(paper["Link"]):
-            pdf_text = extract_text_from_pdf(paper["Link"])
-            paper["Abstract"] = extract_abstract(pdf_text, content_type="pdf")
-        else:
-            driver.get(paper["Link"])
-            time.sleep(2)
-            papier_page_soup = BeautifulSoup(driver.page_source, 'html.parser')
-            html_content = str(papier_page_soup)
-            paper["Abstract"] = extract_abstract(html_content, content_type="html")
 
-        # Analyzing the abstract
-        is_llm_simulation, types,applications, benefits = analyze_abstract(paper["Abstract"])
+        """
+
+        """
+        is_llm_simulation_title, domain, entities, applications, interactions= analyze_title(paper["Title"])
+        paper["Is LLM Simulation Title"] = is_llm_simulation_title
+        if is_llm_simulation_title.lower() in ['yes', 'yes.',"unclear","unclear."]:
+            #print(f"Based on title, it could be social simulation")
+            if is_pdf(paper["Link"]):
+                pdf_text = extract_text_from_pdf(paper["Link"])
+                paper["Abstract"] = extract_abstract(pdf_text, content_type="pdf")
+            else:
+                driver.get(paper["Link"])
+                time.sleep(1)
+                papier_page_soup = BeautifulSoup(driver.page_source, 'html.parser')
+                html_content = str(papier_page_soup)
+                paper["Abstract"] = extract_abstract(html_content, content_type="html")
+                driver.back()
+                time.sleep(1)
+
+            # Analyzing the abstract
+            is_llm_simulation_abstract, domain, entities, applications, interactions = analyze_abstract(paper["Abstract"])
+
+            if is_llm_simulation_abstract.lower() in ['yes', 'yes.',"unclear","unclear."]:
+                #print(f"Based on abstract, it could be social simulation")
+                number_simulations += 1
+                print(f"We have collected {number_simulations} simulations")
+           #else:
+                #print(f"Based on abstract, it is not a social simulation")
+            paper["Is LLM Simulation Abstract"] = is_llm_simulation_abstract
+
 
         # Storing the results in the paper dictionary
-        paper["Is LLM Simulation"] = is_llm_simulation
-        paper["Simulation Type"] = types
+
+        print(f"Domain? {domain}")
+        print(f"Entities? {entities}")
+        print(f"Interactions? {interactions}")
+
+        paper["Simulation Domain"] = domain
+        paper["Entities?"] = entities
         paper["Application Type"] = applications
-        paper["Simulation Benefits"] = benefits
+        paper["Interactions?"] = interactions
 
         try:
             paper["Additional link"] = result.find('div', {'class': "gs_or_ggsm"}).find('a')['href']
@@ -315,25 +399,15 @@ def parser(soup, page, year):
             paper['Abstract'] = ''
         """
 
-        for a in result.findAll('div', {'class': "gs_fl"})[-1].findAll('a'):
-            if a.text != '':
-                if a.text.startswith('Cited'):
-                    paper['Cited by'] = a.text.rstrip().split()[-1]
-                    paper['Cited list'] = url + a['href']
-                if a.text.startswith('Related'):
-                    paper['Related list'] = url + a['href']
-                if a.text.startswith('Import'):
-                    paper['Bibtex'] = requests.get(a['href']).text
-                    
+
+
         papers.append(paper)
+
+
         # Wait 20 seconds until the next request to google
-        time.sleep(5)
+        time.sleep(2)
 
-    return papers, len(html)
-
-
-
-
+    return papers, len(html),number_simulations
 
 
 def generate_answer(question, insights):
@@ -352,22 +426,7 @@ def generate_answer(question, insights):
 
 
 
-def generate_report(types, applications, benefits):
-    print("\nReport on LLMs in Social Simulations:")
-    print("-" * 40)
 
-    questions = [
-        "What are the main types of applications of Social Simulations created using LLMs?",
-        "What are the primary applications of LLMs in Social Simulations?",
-        "What distinct benefits do LLMs offer over traditional methods in Social Simulations?",
-
-    ]
-
-    insights_lists = [types, applications, benefits]
-
-    for i, question in enumerate(questions):
-        answer = generate_answer(question, insights_lists[i])
-        print(f"\n{i + 1}. {question}\n{answer}")
 
 
 
@@ -377,6 +436,7 @@ def generate_report(types, applications, benefits):
 
 
 if __name__ == '__main__':
+
     query = config['search']['query']
     year = int(config['search']['start_year'])
     output = config['default']['result_path']
@@ -388,7 +448,7 @@ if __name__ == '__main__':
 
     with open(output, 'a', newline='') as outcsv:
         csv.writer(outcsv).writerow(['Link', 'Additional link', 'Title', 'Authors', 'Abstract', 'Cited by',
-                                     'Cited list', 'Related list', 'Bibtex', 'Year', 'Google page',"Is LLM Simulation", "Simulation Type","Application Type" ,"Simulation Benefits"])
+                                     'Cited list', 'Related list', 'Bibtex', 'Year', 'Google page',"Is LLM Simulation Title","Is LLM Simulation Abstract","Simulation Domain", "Entities?","Application Type" ,"Interactions?"])
 
     # String search year by year.
     while year <= int(config['search']['end_year']):
@@ -396,31 +456,35 @@ if __name__ == '__main__':
         check_captcha()
         page = 1
         total = 0
+        number_simulations = 0
         while True:
             print("PARSER IN")
-            art, t = parser(BeautifulSoup(driver.page_source, 'lxml'), page, year)
+
+            art, t,number_simulations = parser(BeautifulSoup(driver.page_source, 'lxml'), page, year, number_simulations)
+
             print("PARSER OUT")
             total += t
+
             df = pd.DataFrame(art)
             df.to_csv(output, mode='a', header=False, index=False)
+
             try:
                 driver.find_element_by_class_name("gs_ico_nav_next").click()
+                print("ELEMENT WAS FOUND")
                 check_captcha()
+                print("CAPTCHA CHECKED")
                 page += 1
+                print("PAGE UPDATED")
             except:
                 logging.info(
                     "No more pages for {} year, total of {} pages and {} articles processed".format(year, page, total))
                 year += 1
+
+                print("NO PAGE")
                 # Wait 10 seconds until the next page request
-                time.sleep(3)
+                time.sleep(10)
                 break
 
-    types = list(df['Simulation Type'].dropna())
-    applications = list(df['Application Type'].dropna())
-    benefits = list(df['Simulation Benefits'].dropna())
-
-
-    generate_report(types, applications, benefits)
 
     logging.info("Ending...")
     driver.close()
