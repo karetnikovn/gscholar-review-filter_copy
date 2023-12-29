@@ -19,7 +19,7 @@ from pdfminer.high_level import extract_text
 logging.basicConfig(filename='log.log', level=logging.INFO, format='%(asctime)s %(message)s')
 config = configparser.ConfigParser()
 config.read('config.ini')
-openai.api_key = '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'
+openai.api_key = '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'
 
 # Load PICOC terms
 picoc = {
@@ -57,21 +57,54 @@ time.sleep(1)
 driver.find_element_by_name("save").click()
 
 
-def split_content_into_chunks(content, chunk_size=16000):  # chunk_size can be adjusted as needed
+def split_content_into_chunks(content, chunk_size=8000):  # chunk_size can be adjusted as needed
     return [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
+from bs4 import BeautifulSoup
+from nltk.tokenize import sent_tokenize
+import nltk
 
+# Ensure you've downloaded the Punkt tokenizer models
+nltk.download('punkt')
 
 def clean_html_content(html_content):
+    # Use BeautifulSoup to parse the HTML content
     soup = BeautifulSoup(html_content, 'html.parser')
 
-    # Extract just the body content
-    body = soup.body
+    # Extract all text from the soup object
+    all_text = soup.get_text(separator=' ', strip=True)
 
-    # Remove <script> and <style> tags from the body
-    [s.extract() for s in body(['script', 'style'])]
+    # Tokenize the text into sentences
+    sentences = sent_tokenize(all_text)
 
-    # Convert back to string and return
-    return str(body)
+    # Initialize an empty list to hold filtered segments
+    filtered_segments = []
+
+    # Temporary variable to hold the count of sentences in a segment
+    segment_sentence_count = 0
+
+    # Variable to hold text of the current segment
+    current_segment = []
+
+    # Iterate over sentences and group them into segments with more than 3 sentences
+    for sentence in sentences:
+        current_segment.append(sentence)
+        segment_sentence_count += 1
+
+        # Check if the current segment has more than 3 sentences
+        if segment_sentence_count > 3:
+            # Add the segment to the filtered list and reset the count and segment
+            filtered_segments.append(' '.join(current_segment))
+            segment_sentence_count = 0
+            current_segment = []
+
+    # Check if the last segment had more than 3 sentences and add it if it was not added
+    if segment_sentence_count > 3:
+        filtered_segments.append(' '.join(current_segment))
+
+    # Join the filtered segments back into a single string, separated by double newlines
+    clean_text = "\n\n".join(filtered_segments)
+
+    return clean_text
 
 
 def extract_text_from_pdf(pdf_link):
@@ -94,120 +127,73 @@ def extract_text_from_pdf(pdf_link):
         return ""
 
 
+import concurrent.futures
+import openai
 import time
-
 
 def analyze_abstract(abstract, max_retries=4, initial_delay=5):
     def request_to_openai(message_content, max_retries, initial_delay):
         retry_count = 0
         while retry_count < max_retries:
             try:
-                response = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo",
-                    messages=[{"role": "user", "content": message_content}]
+                response = openai.Completion.create(
+                    model="gpt-3.5-turbo-instruct",  # Assuming you're using an Instruct model named "text-davinci-003"
+                    prompt=message_content,
+                    temperature=0,  # Adjust as needed for creativity
+                    max_tokens=20
                 )
-                return response.choices[0].message['content'].strip()
-            except Exception as e:
+                return response.choices[0].text.strip()
+            except openai.error.OpenAIError as e:
                 if "The server is overloaded or not ready yet" in str(e) and retry_count < max_retries - 1:
                     wait_time = initial_delay * (2 ** retry_count)  # Exponential backoff
                     print(f"Server error detected. Retrying in {wait_time} seconds...")
                     time.sleep(wait_time)
                     retry_count += 1
                 else:
-                    print("SMTH wrong in request_to_openai functions")
+                    print("Something went wrong in request_to_openai_instruct function")
                     return "NA"
-                    # raise  # Raise the exception if it's a different error or if retries are exhausted
+                    # Optionally, y
 
     # Step 1: Check if the abstract discusses a simulation with LLM models
+    print("Asking about methodes...")
+
     response_1_content = request_to_openai(
-        "Based on the paper abstract tell, whether main purpose of the study is to simulate or model social phenomena?"
-        # "Social simulation is defined as a method that uses computer-based models to replicate, analyze,"
-      #   "and predict complex social dynamics based on the behaviors and interactions of individuals and groups within a society"
-        "Please give one word as an Yes/No/Unclear answer. Abstract: " + abstract,
+        "Is it stated in the paper abstract, that authors developed an agent-based simulation with Large Language Models in order to study social phenomena?"
+        "Please give Yes/No as an answer."
+        "Abstract starts: " + abstract +
+        "Abstract ends.",
         max_retries, initial_delay)
-    print(f"Based on abstract: {response_1_content.lower()}")
-    is_llm_simulation = response_1_content.lower() in ['yes', 'yes.',"unclear","unclear."]
 
-    #  .
-    if not is_llm_simulation:
-        return "no", None, None, None, None
+    if not ("yes" in response_1_content.lower()):
+        return response_1_content.lower(), None
 
-
-    
     # Step 15: Identify the domain of the simulation
     domain = request_to_openai(
         "What is the domain of the simulation described in this abstract (e.g., social, economic, etc.)? Please give max 5 words as an answer."
         "If there is no information to answer this question, state NA. Abstract: " + abstract, max_retries,
         initial_delay)
 
+    """
     # Step 2: Identify the type of simulation
     entities = request_to_openai(
-        "Does the abstract mention entities that could represent individuals, groups, or institutions within a social context?"
+        "Does the abstract mention agents or entities that could represent individuals, groups, or institutions ?"
         "Please give Yes/No/Unclear as an answer."
         "If there is no information to answer this question, state NA. Abstract: " + abstract, max_retries,
         initial_delay)
 
+    print("Asking about interactions...")
+
     # Step 3: Outlining the main benefits
-    interactions = request_to_openai("Does the abstract mention interactions, behaviors, or dynamics that are characteristic of social systems ?"
-                                  "Please give Yes/No/Unclear as an answer."
+    interactions = request_to_openai("Does the abstract mention interactions, behaviors,communication, or dynamics that are characteristic of social systems ?"
+                                  "Please give Yes/No as an answer."
                                  "If there is no information to answer this question, state NA. Abstract: " + abstract,
                                  max_retries, initial_delay)
-    """
-    # Step 4: Outlining the main application
-    applications = request_to_openai("What is the primary application of LLM in this social simulation?"
-                                     "Describe shortly."
-                                     "If there is no information to answer this question, state NA. Abstract: " + abstract,
-                                     max_retries, initial_delay)
+
     """
 
-
-    applications = None
-
-    return response_1_content.lower(), domain, entities, applications, interactions
+    return response_1_content.lower(), domain
 
 
-def analyze_title(title, max_retries=4, initial_delay=5):
-    def request_to_openai(message_content, max_retries, initial_delay):
-        retry_count = 0
-        while retry_count < max_retries:
-            try:
-                response = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo",
-                    messages=[{"role": "user", "content": message_content}]
-                )
-                return response.choices[0].message['content'].strip()
-            except Exception as e:
-                if "The server is overloaded or not ready yet" in str(e) and retry_count < max_retries - 1:
-                    wait_time = initial_delay * (2 ** retry_count)  # Exponential backoff
-                    print(f"Server error detected. Retrying in {wait_time} seconds...")
-                    time.sleep(wait_time)
-                    retry_count += 1
-                else:
-                    print("SMTH wrong in request_to_openai functions")
-                    return "NA"
-                    # raise  # Raise the exception if it's a different error or if retries are exhausted
-
-    # Step 1: Check if the abstract discusses a simulation with LLM models
-    response_1_content = request_to_openai(
-        "Based on the scientific paper title tell, whether paper may describe a created by the authors computational model(s) or simulation that attempt to mimic social processes, behaviors, or systems?"
-       # "Social simulation is defined as a method that uses computer-based models to replicate, analyze,"
-     #   "and predict complex social dynamics based on the behaviors and interactions of individuals and groups within a society"
-        "Please give one word as an Yes/No/Unclear answer. Title: " + title,
-        max_retries, initial_delay)
-    print(f"Based on title: {response_1_content.lower()}" )
-    is_llm_simulation = response_1_content.lower() in ['yes', 'yes.',"unclear","unclear."]
-
-    #  computational models that attempt to mimic social processes, behaviors, or systems.
-    if not is_llm_simulation:
-        return "no", None, None, None, None
-
-    domain = None
-    types = None
-
-    benefits = None
-    applications = None
-
-    return response_1_content.lower(), domain, types, applications, benefits
 
 
 import time
@@ -223,7 +209,6 @@ def get_abstract_from_chatgpt(content, content_type="html", max_retries=3, initi
         raise ValueError(f"Unknown content_type: {content_type}")
 
     chunks = split_content_into_chunks(cleaned_content)
-
     for chunk in chunks:
         retry_count = 0
         while retry_count < max_retries:
@@ -231,19 +216,15 @@ def get_abstract_from_chatgpt(content, content_type="html", max_retries=3, initi
                 # Construct the role message based on content type
                 system_message = f"You are a helpful assistant that extracts abstracts from {content_type.upper()} content."
 
-                response = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo-16k",
-                    messages=[
-                        {"role": "system", "content": system_message},
-                        {"role": "user",
-                         "content": f"Extract abstract from the following {content_type.upper()} content: {chunk}. Output only it and nothing else."
-                                    f"Hint: usually it starts from the word abstract"
-                                    f" If you did not find an abstract, please output 'Not Found'."}
-                    ]
+                response = openai.Completion.create(
+                    model="gpt-3.5-turbo-instruct",  # Assuming you're using an Instruct model named "text-davinci-003"
+                    prompt=f"Extract abstract from the following {content_type.upper()} content: {chunk}. Output only it and nothing else."
+                                    f"If you did not find an abstract, please output 'Not Found'.",
+                    temperature=0,  # Adjust as needed for creativity
+                    max_tokens=500
                 )
-
-                abstract = response.choices[0].message['content'].strip()
-                if abstract.lower() != 'not found':
+                abstract = response.choices[0]['text'].strip()
+                if 'not found' not in abstract.lower():
                     return abstract
                 break  # Break out of the retry loop if no server error occurred
             except Exception as e:
@@ -310,14 +291,8 @@ def parser(soup, page, year, number_simulations):
     for result in html:
         paper = {'Link': result.find('h3', {'class': "gs_rt"}).find('a')['href'], 'Additional link': '', 'Title': '',
                  'Authors': '', 'Abstract': '', 'Cited by': '', 'Cited list': '', 'Related list': '', 'Bibtex': '',
-                 'Year': year, 'Google page': page, "Is LLM Simulation Title":'', "Is LLM Simulation Abstract":'', "Simulation Domain":'', "Entities?": '',"Application Type":'', "Interactions?":''}
+                 'Year': year, 'Google page': page, "Research method?":'', "Simulation Domain":''}
 
-        # If it does not pass at Title-Abstract-Keyword filter exclude this paper and continue
-        """
-        if not filterTitleAbsKey(paper['Link']):
-            continue
-
-        """
 
         for a in result.findAll('div', {'class': "gs_fl"})[-1].findAll('a'):
             if a.text != '':
@@ -342,19 +317,12 @@ def parser(soup, page, year, number_simulations):
         paper['Authors'] = ";".join(
             ["%s:%s" % (a.text, a['href']) for a in result.find('div', {'class': "gs_a"}).findAll('a')])
 
-        # Main logic
 
-        """
-
-        """
-        is_llm_simulation_title, domain, entities, applications, interactions= analyze_title(paper["Title"])
-        paper["Is LLM Simulation Title"] = is_llm_simulation_title
-        if is_llm_simulation_title.lower() in ['yes', 'yes.',"unclear","unclear."]:
-            #print(f"Based on title, it could be social simulation")
-            if is_pdf(paper["Link"]):
-                pdf_text = extract_text_from_pdf(paper["Link"])
-                paper["Abstract"] = extract_abstract(pdf_text, content_type="pdf")
-            else:
+        if is_pdf(paper["Link"]):
+            pdf_text = extract_text_from_pdf(paper["Link"])
+            paper["Abstract"] = extract_abstract(pdf_text, content_type="pdf")
+        else:
+            try:
                 driver.get(paper["Link"])
                 time.sleep(1)
                 papier_page_soup = BeautifulSoup(driver.page_source, 'html.parser')
@@ -362,43 +330,33 @@ def parser(soup, page, year, number_simulations):
                 paper["Abstract"] = extract_abstract(html_content, content_type="html")
                 driver.back()
                 time.sleep(1)
+            except:
+                paper["Abstract"] = "Not Found"
 
-            # Analyzing the abstract
-            is_llm_simulation_abstract, domain, entities, applications, interactions = analyze_abstract(paper["Abstract"])
-
-            if is_llm_simulation_abstract.lower() in ['yes', 'yes.',"unclear","unclear."]:
-                #print(f"Based on abstract, it could be social simulation")
-                number_simulations += 1
-                print(f"We have collected {number_simulations} simulations")
-           #else:
-                #print(f"Based on abstract, it is not a social simulation")
-            paper["Is LLM Simulation Abstract"] = is_llm_simulation_abstract
+        # Analyzing the abstract
+        is_llm_simulation_abstract, domain= analyze_abstract(paper["Abstract"])
 
 
-        # Storing the results in the paper dictionary
 
-        print(f"Domain? {domain}")
-        print(f"Entities? {entities}")
-        print(f"Interactions? {interactions}")
+        print(f"Research method? {is_llm_simulation_abstract}")
 
+        # Convert both strings to lower case for case-insensitive comparison
+        is_llm_simulation_abstract_lower = is_llm_simulation_abstract.lower()
+
+        # Check for the presence of the words in both strings
+        if (("yes" in is_llm_simulation_abstract_lower or "yes." in is_llm_simulation_abstract_lower)):
+            number_simulations += 1
+            print(f"We have collected {number_simulations} simulations")
+
+
+        paper["Research method?"] = is_llm_simulation_abstract
         paper["Simulation Domain"] = domain
-        paper["Entities?"] = entities
-        paper["Application Type"] = applications
-        paper["Interactions?"] = interactions
+
 
         try:
             paper["Additional link"] = result.find('div', {'class': "gs_or_ggsm"}).find('a')['href']
         except:
             paper["Additional link"] = ''
-
-
-        """
-        try:
-            paper['Abstract'] = result.find('div', {'class': "gs_rs"}).text
-        except:
-            paper['Abstract'] = ''
-        """
-
 
 
         papers.append(paper)
@@ -410,27 +368,9 @@ def parser(soup, page, year, number_simulations):
     return papers, len(html),number_simulations
 
 
-def generate_answer(question, insights):
-    # This function will use ChatGPT to generate an answer based on the question and insights
-    prompt = f"{question}\n\nTo answers use this information and nothing else: {', '.join(insights)}\n\n"
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo-16k",
-        messages=[
-            {"role": "user",
-             "content": prompt}
-        ]
-    )
-
-    return response.choices[0].message['content'].strip()
-
-
-
-
-
-
-
-
-
+import time
+import logging
+from selenium.common.exceptions import NoSuchElementException
 
 
 
@@ -448,7 +388,7 @@ if __name__ == '__main__':
 
     with open(output, 'a', newline='') as outcsv:
         csv.writer(outcsv).writerow(['Link', 'Additional link', 'Title', 'Authors', 'Abstract', 'Cited by',
-                                     'Cited list', 'Related list', 'Bibtex', 'Year', 'Google page',"Is LLM Simulation Title","Is LLM Simulation Abstract","Simulation Domain", "Entities?","Application Type" ,"Interactions?"])
+                                     'Cited list', 'Related list', 'Bibtex', 'Year', 'Google page',"Research method?","Simulation Domain"])
 
     # String search year by year.
     while year <= int(config['search']['end_year']):
@@ -468,14 +408,34 @@ if __name__ == '__main__':
             df = pd.DataFrame(art)
             df.to_csv(output, mode='a', header=False, index=False)
 
-            try:
-                driver.find_element_by_class_name("gs_ico_nav_next").click()
-                print("ELEMENT WAS FOUND")
-                check_captcha()
-                print("CAPTCHA CHECKED")
-                page += 1
-                print("PAGE UPDATED")
-            except:
+            max_retries = 5  # Set the number of retries
+            retries = 0
+
+            while retries < max_retries:
+                try:
+                    # Try to find and click the next page button
+                    driver.find_element_by_class_name("gs_ico_nav_next").click()
+                    print("ELEMENT WAS FOUND")
+
+                    check_captcha()
+                    print("CAPTCHA CHECKED")
+
+                    page += 1
+                    print("PAGE UPDATED")
+
+                    break  # If successful, break out of the retry loop
+                except NoSuchElementException:
+                    # Element not found, wait and then retry
+                    print(f"Attempt {retries + 1} failed. Retrying...")
+                    retries += 1
+                    time.sleep(5)  # Wait before retrying
+                except Exception as e:
+                    # Handle other exceptions and log the message
+                    logging.info(f"An exception occurred: {e}")
+                    break  # Break the loop if an unexpected exception occurs
+
+            if retries == max_retries:
+                # If the maximum retries have been reached
                 logging.info(
                     "No more pages for {} year, total of {} pages and {} articles processed".format(year, page, total))
                 year += 1
@@ -483,7 +443,6 @@ if __name__ == '__main__':
                 print("NO PAGE")
                 # Wait 10 seconds until the next page request
                 time.sleep(10)
-                break
 
 
     logging.info("Ending...")
