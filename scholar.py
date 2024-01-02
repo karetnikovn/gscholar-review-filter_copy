@@ -19,7 +19,7 @@ from pdfminer.high_level import extract_text
 logging.basicConfig(filename='log.log', level=logging.INFO, format='%(asctime)s %(message)s')
 config = configparser.ConfigParser()
 config.read('config.ini')
-openai.api_key = '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'
+openai.api_key = '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'
 
 # Load PICOC terms
 picoc = {
@@ -57,7 +57,7 @@ time.sleep(1)
 driver.find_element_by_name("save").click()
 
 
-def split_content_into_chunks(content, chunk_size=8000):  # chunk_size can be adjusted as needed
+def split_content_into_chunks(content, chunk_size=16000):  # chunk_size can be adjusted as needed
     return [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
 from bs4 import BeautifulSoup
 from nltk.tokenize import sent_tokenize
@@ -118,7 +118,7 @@ def extract_text_from_pdf(pdf_link):
             f.write(response.content)
 
         # Extract text from the first two pages
-        return extract_text(file_path, page_numbers=[0, 1,2,3])
+        return extract_text(file_path, page_numbers=[0, 1,2])
     except requests.RequestException as e:
         print(f"Error downloading PDF: {e}")
         return ""
@@ -158,40 +158,23 @@ def analyze_abstract(abstract, max_retries=4, initial_delay=5):
     print("Asking about methodes...")
 
     response_1_content = request_to_openai(
-        "Is it stated in the paper abstract, that authors developed an agent-based simulation with Large Language Models in order to study social phenomena?"
+        "Does paper’s abstract mention a social simulation developed using Large Language Models?"
         "Please give Yes/No as an answer."
         "Abstract starts: " + abstract +
         "Abstract ends.",
         max_retries, initial_delay)
 
+    print("Does paper’s abstract mention a social simulation?"
+        "Please give Yes/No as an answer."
+        "Abstract starts: " + abstract +
+        "Abstract ends.")
+
     if not ("yes" in response_1_content.lower()):
-        return response_1_content.lower(), None
+        return response_1_content.lower()
 
-    # Step 15: Identify the domain of the simulation
-    domain = request_to_openai(
-        "What is the domain of the simulation described in this abstract (e.g., social, economic, etc.)? Please give max 5 words as an answer."
-        "If there is no information to answer this question, state NA. Abstract: " + abstract, max_retries,
-        initial_delay)
 
-    """
-    # Step 2: Identify the type of simulation
-    entities = request_to_openai(
-        "Does the abstract mention agents or entities that could represent individuals, groups, or institutions ?"
-        "Please give Yes/No/Unclear as an answer."
-        "If there is no information to answer this question, state NA. Abstract: " + abstract, max_retries,
-        initial_delay)
 
-    print("Asking about interactions...")
-
-    # Step 3: Outlining the main benefits
-    interactions = request_to_openai("Does the abstract mention interactions, behaviors,communication, or dynamics that are characteristic of social systems ?"
-                                  "Please give Yes/No as an answer."
-                                 "If there is no information to answer this question, state NA. Abstract: " + abstract,
-                                 max_retries, initial_delay)
-
-    """
-
-    return response_1_content.lower(), domain
+    return response_1_content.lower()
 
 
 
@@ -200,6 +183,9 @@ import time
 
 
 def get_abstract_from_chatgpt(content, content_type="html", max_retries=3, initial_delay=5):
+    # Function to preprocess content based on its type
+
+
     # Preprocess content based on its type
     if content_type == "html":
         cleaned_content = clean_html_content(content)
@@ -209,32 +195,46 @@ def get_abstract_from_chatgpt(content, content_type="html", max_retries=3, initi
         raise ValueError(f"Unknown content_type: {content_type}")
 
     chunks = split_content_into_chunks(cleaned_content)
+
+    if len(chunks) == 0:
+        print("No content to exctract abstact from")
+
     for chunk in chunks:
         retry_count = 0
         while retry_count < max_retries:
+            print(f"Processing chunk, retry attempt: {retry_count}/{len(chunks)} ")
             try:
                 # Construct the role message based on content type
                 system_message = f"You are a helpful assistant that extracts abstracts from {content_type.upper()} content."
 
-                response = openai.Completion.create(
-                    model="gpt-3.5-turbo-instruct",  # Assuming you're using an Instruct model named "text-davinci-003"
-                    prompt=f"Extract abstract from the following {content_type.upper()} content: {chunk}. Output only it and nothing else."
-                                    f"If you did not find an abstract, please output 'Not Found'.",
-                    temperature=0,  # Adjust as needed for creativity
+                response = openai.ChatCompletion.create(
+                    model="gpt-3.5-turbo-1106",
+                    messages=[
+                        {"role": "system", "content": system_message},
+                        {"role": "user",
+                         "content": f"Extract an abstract from the following {content_type.upper()} content: {chunk}."
+                                    f"Please provide only the abstract."
+                                    f"If no abstract is found, respond with 'Not Found'."}
+                    ],
                     max_tokens=500
                 )
-                abstract = response.choices[0]['text'].strip()
+                abstract = response['choices'][0]['message']['content'].strip()
                 if 'not found' not in abstract.lower():
                     return abstract
-                break  # Break out of the retry loop if no server error occurred
+                retry_count += 1
+                break  # Exit the retry loop, no abstract found in this chunk
             except Exception as e:
                 if "The server is overloaded or not ready yet" in str(e) and retry_count < max_retries - 1:
-                    wait_time = initial_delay * (2 ** retry_count)  # Exponential backoff
+                    wait_time = initial_delay * (2 ** retry_count)
                     print(f"Server error detected. Retrying in {wait_time} seconds...")
                     time.sleep(wait_time)
                     retry_count += 1
                 else:
                     raise  # Raise the exception if it's a different error or if retries are exhausted
+        else:
+            # Continue to the next chunk if no abstract was found in the current chunk
+            print("PROCESSED ALL CHUNKS")
+            continue
 
     # If all chunks were processed and no abstract was found:
     return "Not Found"
@@ -324,17 +324,18 @@ def parser(soup, page, year, number_simulations):
         else:
             try:
                 driver.get(paper["Link"])
-                time.sleep(1)
+                time.sleep(4)
                 papier_page_soup = BeautifulSoup(driver.page_source, 'html.parser')
                 html_content = str(papier_page_soup)
                 paper["Abstract"] = extract_abstract(html_content, content_type="html")
                 driver.back()
                 time.sleep(1)
             except:
+                print("LINK IS BROKEN")
                 paper["Abstract"] = "Not Found"
 
         # Analyzing the abstract
-        is_llm_simulation_abstract, domain= analyze_abstract(paper["Abstract"])
+        is_llm_simulation_abstract= analyze_abstract(paper["Abstract"])
 
 
 
@@ -350,7 +351,7 @@ def parser(soup, page, year, number_simulations):
 
 
         paper["Research method?"] = is_llm_simulation_abstract
-        paper["Simulation Domain"] = domain
+        paper["Simulation Domain"] = " "
 
 
         try:
@@ -366,6 +367,45 @@ def parser(soup, page, year, number_simulations):
         time.sleep(2)
 
     return papers, len(html),number_simulations
+
+
+def parser2(soup, page, year):
+    papers = []
+    html = soup.findAll('div', {'class': 'gs_r gs_or gs_scl'})
+    for result in html:
+        paper = {
+            'Link': result.find('h3', {'class': "gs_rt"}).find('a')['href'],
+            'Additional link': '',
+            'Title': result.find('h3', {'class': "gs_rt"}).text,
+            'Authors': ";".join(["%s:%s" % (a.text, a['href']) for a in result.find('div', {'class': "gs_a"}).findAll('a')]),
+            'Cited by': "",
+            'Year': year,
+            'Google page': page,
+            'Cited list': '', 'Related list': '', 'Bibtex': ''
+        }
+
+
+        for a in result.findAll('div', {'class': "gs_fl"})[-1].findAll('a'):
+            if a.text != '':
+                if a.text.startswith('Cited'):
+                    paper['Cited by'] = a.text.rstrip().split()[-1]
+                    paper['Cited list'] = url + a['href']
+
+                if a.text.startswith('Related'):
+                    paper['Related list'] = url + a['href']
+                if a.text.startswith('Import'):
+                    paper['Bibtex'] = requests.get(a['href']).text
+
+
+
+        papers.append(paper)
+        # Add additional data extraction if needed
+
+    return papers, len(html)
+
+
+
+
 
 
 import time
@@ -387,8 +427,7 @@ if __name__ == '__main__':
     logging.info("Search query is: {}".format(query))
 
     with open(output, 'a', newline='') as outcsv:
-        csv.writer(outcsv).writerow(['Link', 'Additional link', 'Title', 'Authors', 'Abstract', 'Cited by',
-                                     'Cited list', 'Related list', 'Bibtex', 'Year', 'Google page',"Research method?","Simulation Domain"])
+        csv.writer(outcsv).writerow(['Link', 'Additional link', 'Title', 'Authors', 'Cited by', 'Year', 'Google page','Cited list','Related list','Bibtex'])
 
     # String search year by year.
     while year <= int(config['search']['end_year']):
@@ -400,7 +439,7 @@ if __name__ == '__main__':
         while True:
             print("PARSER IN")
 
-            art, t,number_simulations = parser(BeautifulSoup(driver.page_source, 'lxml'), page, year, number_simulations)
+            art, t = parser2(BeautifulSoup(driver.page_source, 'lxml'), page, year)
 
             print("PARSER OUT")
             total += t
@@ -408,7 +447,7 @@ if __name__ == '__main__':
             df = pd.DataFrame(art)
             df.to_csv(output, mode='a', header=False, index=False)
 
-            max_retries = 5  # Set the number of retries
+            max_retries = 3  # Set the number of retries
             retries = 0
 
             while retries < max_retries:
@@ -429,21 +468,77 @@ if __name__ == '__main__':
                     print(f"Attempt {retries + 1} failed. Retrying...")
                     retries += 1
                     time.sleep(5)  # Wait before retrying
-                except Exception as e:
-                    # Handle other exceptions and log the message
-                    logging.info(f"An exception occurred: {e}")
-                    break  # Break the loop if an unexpected exception occurs
 
             if retries == max_retries:
                 # If the maximum retries have been reached
-                logging.info(
-                    "No more pages for {} year, total of {} pages and {} articles processed".format(year, page, total))
-                year += 1
+                print("No more pages for {} year, total of {} pages and {} articles processed")
 
-                print("NO PAGE")
-                # Wait 10 seconds until the next page request
                 time.sleep(10)
+                break
+        year += 1
+        print("Moving to the year: {}".format(year))
+        time.sleep(10)
 
+
+
+
+
+    df = pd.read_csv(output)
+    df['Cited by'] = df['Cited by'].astype(str)
+    is_number = pd.to_numeric(df['Cited by'], errors='coerce').notna()
+
+    cited_papers = df[is_number]
+    cited_papers = cited_papers[~cited_papers['Title'].str.contains('\[BOOK\]', na=False)]
+
+    print("SECOND STAGE")
+    for index, paper in cited_papers.iterrows():
+
+        if is_pdf(paper["Link"]):
+            pdf_text = extract_text_from_pdf(paper["Link"])
+            abstract = extract_abstract(pdf_text, content_type="pdf")
+            df.loc[index, 'Abstract'] = abstract
+        else:
+            try:
+                driver.get(paper["Link"])
+                time.sleep(1)
+                papier_page_soup = BeautifulSoup(driver.page_source, 'html.parser')
+                html_content = str(papier_page_soup)
+                abstract = extract_abstract(html_content, content_type="html")
+                df.loc[index, 'Abstract'] = abstract
+                driver.back()
+                time.sleep(1)
+            except:
+                df.loc[index, 'Abstract']= "Not Found"
+
+        cleaned_citations = df['Abstract'].dropna()
+
+        if len(cleaned_citations) > 1:
+
+            num_abstract_not_found = (cleaned_citations == "Not Found").sum()
+            fraction_abstract_not_found = num_abstract_not_found / len(cleaned_citations)
+            fraction_abstract_found= 1 - fraction_abstract_not_found
+
+            print(num_abstract_not_found)
+            print(len(cleaned_citations))
+            print(f"Fraction of papers for which the Abstract was found: {fraction_abstract_found:.2f}")
+
+
+        # Analyzing the abstract
+        is_llm_simulation_abstract = analyze_abstract(df.loc[index, 'Abstract'])
+
+        print(f"Research method? {is_llm_simulation_abstract}")
+
+        # Convert both strings to lower case for case-insensitive comparison
+        is_llm_simulation_abstract_lower = is_llm_simulation_abstract.lower()
+
+        # Check for the presence of the words in both strings
+        if (("yes" in is_llm_simulation_abstract_lower or "yes." in is_llm_simulation_abstract_lower)):
+            number_simulations += 1
+            print(f"We have collected {number_simulations} simulations")
+
+        df.loc[index, 'Is Simulation?'] = is_llm_simulation_abstract_lower
+
+    df.to_csv(output, mode='w', header=True, index=False)
 
     logging.info("Ending...")
     driver.close()
