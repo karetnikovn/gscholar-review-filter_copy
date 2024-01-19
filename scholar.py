@@ -19,7 +19,7 @@ from pdfminer.high_level import extract_text
 logging.basicConfig(filename='log.log', level=logging.INFO, format='%(asctime)s %(message)s')
 config = configparser.ConfigParser()
 config.read('config.ini')
-openai.api_key = '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'
+openai.api_key = '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'
 
 # Load PICOC terms
 picoc = {
@@ -136,13 +136,16 @@ def analyze_abstract(abstract, max_retries=4, initial_delay=5):
         retry_count = 0
         while retry_count < max_retries:
             try:
-                response = openai.Completion.create(
-                    model="gpt-3.5-turbo-instruct",  # Assuming you're using an Instruct model named "text-davinci-003"
-                    prompt=message_content,
-                    temperature=0,  # Adjust as needed for creativity
-                    max_tokens=20
+                response = openai.ChatCompletion.create(
+                    model="gpt-4-1106-preview",  # Specify the GPT-4 model
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant"},
+                        {"role": "user", "content": message_content}
+                    ],
+                    max_tokens=20,
+                    temperature=0
                 )
-                return response.choices[0].text.strip()
+                return response['choices'][0]['message']['content'].strip()
             except openai.error.OpenAIError as e:
                 if "The server is overloaded or not ready yet" in str(e) and retry_count < max_retries - 1:
                     wait_time = initial_delay * (2 ** retry_count)  # Exponential backoff
@@ -158,16 +161,13 @@ def analyze_abstract(abstract, max_retries=4, initial_delay=5):
     print("Asking about methodes...")
 
     response_1_content = request_to_openai(
-        "Does paper’s abstract mention a social simulation developed using Large Language Models?"
+        "Based on the abstract tell whether authors may have developed an agent-based simulation using LLMs."
         "Please give Yes/No as an answer."
         "Abstract starts: " + abstract +
         "Abstract ends.",
         max_retries, initial_delay)
 
-    print("Does paper’s abstract mention a social simulation?"
-        "Please give Yes/No as an answer."
-        "Abstract starts: " + abstract +
-        "Abstract ends.")
+
 
     if not ("yes" in response_1_content.lower()):
         return response_1_content.lower()
@@ -213,8 +213,8 @@ def get_abstract_from_chatgpt(content, content_type="html", max_retries=3, initi
                         {"role": "system", "content": system_message},
                         {"role": "user",
                          "content": f"Extract an abstract from the following {content_type.upper()} content: {chunk}."
-                                    f"Please provide only the abstract."
-                                    f"If no abstract is found, respond with 'Not Found'."}
+                                    f"Please provide only the abstract and nothing else."
+                                    f"If no abstract is found or you can not extract it, respond with 'Not Found'."}
                     ],
                     max_tokens=500
                 )
