@@ -19,7 +19,7 @@ from pdfminer.high_level import extract_text
 logging.basicConfig(filename='log.log', level=logging.INFO, format='%(asctime)s %(message)s')
 config = configparser.ConfigParser()
 config.read('config.ini')
-openai.api_key = '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'
+openai.api_key = 'TOKEN'
 
 # Load PICOC terms
 picoc = {
@@ -30,7 +30,37 @@ picoc = {
     'context': re.compile(config['picoc']['context']) if config['picoc']['context'] != "" else None
 }
 
+
+def check_captcha(first_time = None):
+    captcha = driver.find_elements_by_css_selector("#captcha")
+    captcha += driver.find_elements_by_css_selector("#gs_captcha_f")
+    captcha += driver.find_elements_by_css_selector("#g-recaptcha")
+    captcha += driver.find_elements_by_css_selector("#recaptcha")
+    while captcha:
+        logging.info(
+            "Captcha found! You need to fill it on browser to continue. Go to the terminal and type 'y' when the Captcha be solved")
+        print("Captcha found! You need to fill it on browser to continue...")
+        solve = input("Type 'y' when the Captcha be solved: ")
+        if solve == "y":
+            try:
+                if first_time == None:
+                    driver.find_element_by_id("gs_res_sb_yyc")
+                else:
+                    break
+
+                logging.info("Captcha solved, continuing...")
+                break
+            except:
+                print("Captcha not solved, try again! You need to fill it on browser to continue...")
+                logging.info("Captcha not solved, try again! You need to fill it on browser to continue...")
+        else:
+            print("Input error. Try again")
+
+
+
 # Create a new Chorme session
+
+
 
 options = None
 if config['default']['binary_location']:
@@ -40,6 +70,8 @@ if config['default']['binary_location']:
 driver = webdriver.Chrome(r"C:\Users\karet\Downloads\chromedriver_win32\chromedriver", options=options)
 url = "https://scholar.google.com/"
 driver.get(url)
+time.sleep(1)
+check_captcha("ulalala")
 
 # Setting Google Scholar
 driver.maximize_window()
@@ -241,27 +273,6 @@ def get_abstract_from_chatgpt(content, content_type="html", max_retries=3, initi
 
 
 # Sometimes a Captcha shows up. It needs to be fixed manually. This function makes the code wait until thisj be fixed
-def check_captcha():
-    captcha = driver.find_elements_by_css_selector("#captcha")
-    captcha += driver.find_elements_by_css_selector("#gs_captcha_f")
-    captcha += driver.find_elements_by_css_selector("#g-recaptcha")
-    captcha += driver.find_elements_by_css_selector("#recaptcha")
-    while captcha:
-        logging.info(
-            "Captcha found! You need to fill it on browser to continue. Go to the terminal and type 'y' when the Captcha be solved")
-        print("Captcha found! You need to fill it on browser to continue...")
-        solve = input("Type 'y' when the Captcha be solved: ")
-        if solve == "y":
-            try:
-                driver.find_element_by_id("gs_res_sb_yyc")
-                logging.info("Captcha solved, continuing...")
-                break
-            except:
-                print("Captcha not solved, try again! You need to fill it on browser to continue...")
-                logging.info("Captcha not solved, try again! You need to fill it on browser to continue...")
-        else:
-            print("Input error. Try again")
-
 
 # Filter the PICOC terms inside the Title-Abstract-Keywords
 
